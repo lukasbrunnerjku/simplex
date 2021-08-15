@@ -10,20 +10,83 @@ Package installation guideline:
 
 Run python file as:
 
->> python simplex.py
+>> python simplex.py 0
+
+>> python simplex.py 1
+
+>> python simplex.py 2
+
+the command line argument (0, 1, 2) specifies which example to solve!
 
 """
 
 
-def simplex_two_phase(A, b, c):
+def simplex_two_phase(A, b, c, verbose = False):
     """
     Implements simplex method using the 2-phrase strategy outlined in 
     Nocedal & Wright (Ch. 13, S 378 -> STARTING THE SIMPLEX METHOD)
 
     Solves following problem:
         min c'x s.t. Ax=b, x >= 0
+
+    Subdivide into two phases,
+
+    PHASE I
+    min e'z s.t. Ax + Ez  b, (x,z) ≥ 0
+
+    PHASE II
+    min c'x s.t. Ax + z  b, x ≥ 0, 0 ≥ z ≥ 0
+    
     """
-    pass
+    
+    m, n = A.shape  # A is mxn matrix
+    e = np.ones((m, ))  # e = (1, 1,..., 1).T
+    E = np.zeros((m, m))
+
+    # E_jj = +1 if bj ≥ 0, E_jj = −1 if bj < 0
+    for j in range(m):  # b is of shape m,
+        E[j, j] = 1 if b[j] >= 0 else -1
+
+    # this way a first feasible point is trivially given by
+    x = np.zeros((n, ))
+    z = np.abs(b)  # zj = |bj|, j = 1, 2,..., m
+
+    # we need to re-write the phase I problem in order
+    # to apply the simplex method below
+    p1_A = np.concatenate([A, E], -1)  # mx(n+m) matrix
+    p1_c = np.concatenate([np.zeros((n, )), e], 0)  # (n+m), vector
+    p1_x = np.concatenate([x, z], 0)  # (n+m), vector
+
+    # by construction the first n entries of x are 0 (active constraints w.r.t. x ≥ 0)
+    p1_B_ = np.arange(n, n+m)  # the inactive set {n, n+1,... n+m-1}
+    p1_N_ = np.arange(n)  # the active set {1, 2,... n}
+
+    # solve the phase I problem to get an initial feasible solution for phase II
+    p1_x, p1_B_, p1_N_ = simplex(p1_A, b, p1_c, p1_x, p1_B_, p1_N_)
+
+    if verbose:
+        print('PHASE I yielded initial solution of:', p1_x)
+
+    # if e'z is positive at this solution the original problem is infeasible
+    if not np.isclose(np.sum(p1_x[n:]), 0):  # e'z is equivalent to the sum over z components
+        raise RuntimeError(f'Problem is infeasible ({np.sum(p1_x[n:])})')
+
+    if np.all(p1_B_ < n):  # PHASE II
+        # if all indices of the inactive set belong to some x of the original problem
+        # we have the case that no artificial elements of z are remaining in the basis
+        x = p1_x[:n]  # initial feasible solution
+        B_ = p1_B_  # initial inactive set
+
+        # take those indices i ∈ {1,2,...n} not already in the inactive set
+        N_ = {i for i in range(n)} - set(p1_B_)  # initial active set
+
+        return simplex(A, b, c, x, B_, N_, verbose)
+
+    else:
+        # from the book:
+        # "...the final basis B for the Phase II problem may still contain components of
+        # z, making it unsuitable as an optimal basis for..." the original problem
+        print('...')
 
 
 def simplex(A, b, c, x, B_, N_, verbose: bool = False):
@@ -57,11 +120,10 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
 
         # Optionally monitor the cost function over iterations
         if verbose:
-            cost = c.T @ x
-            costs.append(cost)
+            costs.append(c.T @ x)
 
         # Keep track of algorithm progress via progress bar updates
-        pbar.set_postfix_str(f'c.T@x={cost}')
+        pbar.set_postfix_str(f'c.T@x={c.T @ x}')
         pbar.update()
 
         if np.all(sN >= 0):
@@ -109,41 +171,85 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
         ax.set_xlabel('simplex iterations')
         plt.savefig('costs.png')
 
-    return x  # cost minimizing vertex
+    return x, B_, N_  # cost minimizing vertex
 
 
 if __name__ == '__main__':
 
-    """
-    example 13.9)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('nr', type=int, help='Example Nr.')
+    parser.add_argument('--verbose', action='store_true')
+    args = parser.parse_args()
 
-    min −5x1 − x2 subject to
-        x1 + x2 ≤ 5,
-        2x1 + (1/2)x2 ≤ 8,
-        x ≥ 0.
+    if args.nr == 0:
+        """
+        example 13.9) from Chapter 13 in the book
 
-    we first need to define equality constraints using slack variables x3, x4
-    
-    min −5x1 − x2 subject to
-        x1 + x2 + x3 = 5,
-        2x1 + (1/2)x2 + x4 = 8,
-        x ≥ 0. ( where the new vector x is (x1, x2, x3, x4).T )
-    """
-    A = np.array([  # mxn
-        [1, 1, 1, 0],
-        [2, 1/2, 0, 1]
-    ])
-    b = np.array([5, 8])  # m,
-    c = np.array([-5, -1, 0, 0])  # n,  -> min c.T @ x
+        min −5x1 − x2 subject to
+            x1 + x2 ≤ 5,
+            2x1 + (1/2)x2 ≤ 8,
+            x ≥ 0.
 
-    x = np.array([0, 0, 5, 8])  # initial feasible point x,
-    # which can be trivially found when each constraint has
-    # introduced a slack variable and b ≥ 0.
+        we first need to define equality constraints using slack variables x3, x4
+        
+        min −5x1 − x2 subject to
+            x1 + x2 + x3 = 5,
+            2x1 + (1/2)x2 + x4 = 8,
+            x ≥ 0. ( where the new vector x is (x1, x2, x3, x4).T )
+        """
+        A = np.array([  # mxn
+            [1, 1, 1, 0],
+            [2, 1/2, 0, 1]
+        ])
+        b = np.array([5, 8])  # m,
+        c = np.array([-5, -1, 0, 0])  # n,  -> min c.T @ x
 
-    # build the initial basis with inactive constraints B_
-    # and active constraints N_ (w.r.t. x ≥ 0)
-    B_ = np.array([i for i in range(len(x)) if x[i] > 0])
-    N_ = np.array([i for i in range(len(x)) if x[i] == 0])
-    
-    x = simplex(A, b, c, x, B_, N_, verbose=True)
-    print('Found optimal x:', x)
+        x = np.array([0, 0, 5, 8])  # initial feasible point x,
+        # which can be trivially found when each constraint has
+        # introduced a slack variable and b ≥ 0.
+
+        # build the initial basis with inactive constraints B_
+        # and active constraints N_ (w.r.t. x ≥ 0)
+        B_ = np.array([i for i in range(len(x)) if x[i] > 0])
+        N_ = np.array([i for i in range(len(x)) if x[i] == 0])
+        
+        x, *_ = simplex(A, b, c, x, B_, N_, verbose=args.verbose)
+        print('Found optimal x:', x)
+
+        """
+        optimal x = [4 0 1 0] (with c.T @ x = -20)
+
+        ==> the ultimate solution is x1 = 4 and x2 = 0, they fulfil all
+        of the given inequality constraints
+            x1 + x2 ≤ 5,
+            2x1 + (1/2)x2 ≤ 8,
+            x ≥ 0.
+        """
+
+    elif args.nr == 1:
+        """
+        example 13.9) from Chapter 13 in the book
+
+        min −5x1 − x2 subject to
+            x1 + x2 ≤ 5,
+            2x1 + (1/2)x2 ≤ 8,
+            x ≥ 0.
+
+        here we test the two phase approach, for which we
+        do not have to (but could) introduce slack variables
+        """
+        A = np.array([  # mxn
+            [1, 1],
+            [2, 1/2]
+        ])
+        b = np.array([5, 8])  # m,
+        c = np.array([-5, -1])  # n,  -> min c.T @ x
+        
+        x, *_ = simplex_two_phase(A, b, c, verbose=args.verbose)
+        print('Found optimal x:', x)
+
+    elif args.nr == 2:
+        pass
+
+    else:
+        raise argparse.ArgumentError
