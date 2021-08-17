@@ -14,9 +14,18 @@ Run python file as:
 
 >> python simplex.py 1
 
->> python simplex.py 2
+...in the example 2 and 3 cycles are encountered thus the algorithm
+would run endlessly, to stop one can press CTRL+C or CTRL+PAUSE,
+the cycle avoidance strategy is partially implemented (bug somewhere)
+ 
+>> python simplex.py 2 
 
-the command line argument (0, 1, 2) specifies which example to solve!
+...in order to see the algorithm cycling use the verbose mode
+>> python simplex.py 2 --verbose
+
+>> python simplex.py 3
+
+the command line argument (0, 1, 2, 3) specifies which example to solve!
 
 """
 
@@ -59,10 +68,10 @@ def simplex_two_phase(A, b, c, verbose = False):
 
     # by construction the first n entries of x are 0 (active constraints w.r.t. x ≥ 0)
     p1_B_ = np.arange(n, n+m)  # the inactive set {n, n+1,... n+m-1}
-    p1_N_ = np.arange(n)  # the active set {1, 2,... n}
+    p1_N_ = np.arange(n)  # the active set {1, 2,... n-1}
 
     # solve the phase I problem to get an initial feasible solution for phase II
-    p1_x, p1_B_, p1_N_ = simplex(p1_A, b, p1_c, p1_x, p1_B_, p1_N_)
+    p1_x, p1_B_, p1_N_ = simplex(p1_A, b, p1_c, p1_x, p1_B_, p1_N_, verbose)
 
     if verbose:
         print('PHASE I yielded initial solution of:', p1_x)
@@ -78,7 +87,7 @@ def simplex_two_phase(A, b, c, verbose = False):
         B_ = p1_B_  # initial inactive set
 
         # take those indices i ∈ {1,2,...n} not already in the inactive set
-        N_ = {i for i in range(n)} - set(p1_B_)  # initial active set
+        N_ = np.array(list({i for i in range(n)} - set(p1_B_)))  # initial active set
 
         return simplex(A, b, c, x, B_, N_, verbose)
 
@@ -89,7 +98,7 @@ def simplex_two_phase(A, b, c, verbose = False):
         print('...')
 
 
-def simplex(A, b, c, x, B_, N_, verbose: bool = False):
+def simplex(A, b, c, x, B_, N_, verbose: bool = False, eps: float = 0.001):
     """
     Implements simplex method using the algorithm 13.1 outlined in 
     Nocedal & Wright (Ch. 13)
@@ -97,10 +106,34 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
     Solves following problem:
         min c'x s.t. Ax=b, x >= 0
     """
+    assert 1 > eps > 0
 
     costs = []
+    keep_track = None
+    encountered_cycle = False
     pbar = tqdm(desc='Find optimal vertex of polytope')
     while True:
+
+        if verbose:
+            print(f'B_ = {B_}; N_ = {N_}')
+            input('PRESS ENTER TO CONTINUE')
+
+        if keep_track is None:
+            keep_track = [B_.copy()]
+        else:
+            if not encountered_cycle:  # once we get rid of the degenerated basis we should never attempt one again
+                for j in range(len(keep_track)):
+                    if np.array_equal(B_, keep_track[j]):  # found the cycle entry
+                        # import pdb; pdb.set_trace()
+                        veps = np.array([eps ** (k+1) for k in range(len(b))])
+                        original_b = b.copy()  # save b for resetting with final basis
+                        b = b + B @ veps
+                        x[B_] = x[B_] + veps
+                        encountered_cycle = True
+                        print('CYCLE ENCOUNTERED')
+                        break
+                else:  # the else clause executes after the loop completes normally
+                    keep_track.append(B_.copy())
 
         # Select the colums of the constraint matrix to build the matrices
         B = A[:, B_]  # mxm
@@ -111,6 +144,9 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
         # Are given by choice of input x
         # x[B_] = Binv @ b
         # x[N_] = 0
+
+        if verbose:
+            print(f'xB = {x[B_]} (xi > 0 if xi == 0 degeneracy case)')
         
         # Solve B.T @ λ = cB for λ
         lambda_ = Binv.T @ c[B_]  # λ
@@ -128,6 +164,10 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
 
         if np.all(sN >= 0):
             pbar.close()
+
+            if encountered_cycle:  # post processing step required
+                x[B_] = Binv @ original_b
+
             break  # found cost minimizing polytope vertex x
 
         # Select q ∈ N with sq < 0 as the entering index
@@ -141,10 +181,10 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
             raise RuntimeError('Problem is unbounded')
     
         # Calculate xq+ = min i | di>0 (xB)i/di and use p to denote the minimizing i
-        search_vector = x[B_] / d  # (xB)i/di ; m,
         pos_entries = np.argwhere(d > 0).flatten()  # i | di>0 ; with i ∈ {1,2,...m}
-        p = np.argmin(search_vector[pos_entries])  # index p ∈ {1,2,...m}
-        xq = search_vector[pos_entries][p]  # xq+  WARNING: xq ≠ x[q]
+        search_vector = x[B_][pos_entries] / d[pos_entries]  # (xB)i/di ; m,
+        p = np.argmin(search_vector)  # index p ∈ {1,2,...m}
+        xq = search_vector[p]  # xq+  WARNING: xq ≠ x[q]
         p = B_[p]  # index p ∈ {1,2,...n}
 
         # Update xB+ = xB − d * xq+
@@ -160,8 +200,6 @@ def simplex(A, b, c, x, B_, N_, verbose: bool = False):
         # p -> leaving index  (leaving and entering w.r.t. the basis B_)
         B_[B_ == p] = q
         N_[N_ == q] = p
-
-        #import pdb; pdb.set_trace()
 
     if verbose:
         plt.plot(costs)
@@ -235,21 +273,103 @@ if __name__ == '__main__':
             2x1 + (1/2)x2 ≤ 8,
             x ≥ 0.
 
-        here we test the two phase approach, for which we
-        do not have to (but could) introduce slack variables
+        we first need to define equality constraints using slack variables x3, x4
+
+        min −5x1 − x2 subject to
+            x1 + x2 + x3 = 5,
+            2x1 + (1/2)x2 + x4 = 8,
+            x ≥ 0. ( where the new vector x is (x1, x2, x3, x4).T )
         """
         A = np.array([  # mxn
-            [1, 1],
-            [2, 1/2]
+            [1, 1, 1, 0],
+            [2, 1 / 2, 0, 1]
         ])
         b = np.array([5, 8])  # m,
-        c = np.array([-5, -1])  # n,  -> min c.T @ x
-        
+        c = np.array([-5, -1, 0, 0])  # n,  -> min c.T @ x
+
         x, *_ = simplex_two_phase(A, b, c, verbose=args.verbose)
         print('Found optimal x:', x)
+        """
+        Find optimal vertex of polytope: 3it [00:00, 1508.20it/s, c.T@x=0.0]
+        PHASE I yielded initial solution of: [3.66666667 1.33333333 0. 0. 0. 0.]
+        -> here we can see that a feasible solution is found in the first
+        phase of the algorithm which is used as the initial feasible point
+        of the second phase, and indeed the second phase is able to find the optimal point
+        from there on.
+        
+        Find optimal vertex of polytope: 2it [00:00, ?it/s, c.T@x=-20.0]
+        Found optimal x: [4. 0. 1. 0.]
+        """
 
     elif args.nr == 2:
-        pass
+        """
+        example 13.2) from Chapter 13 in the book
+        
+        min 3x1 + x2 + x3 subject to
+            2x1 + x2 + x3 ≤ 2,
+            x1 − x2 − x3 ≤ −1,
+            x ≥ 0.
+            
+        we transform the inequality constraints to equality constraints x4, x5
+
+        min 3x1 + x2 + x3 subject to
+            2x1 + x2 + x3 + x4 = 2,
+            x1 − x2 − x3 + x5 = −1,
+            x ≥ 0. ( where the new vector x is (x1, x2, x3, x4. x5).T )
+        """
+
+        A = np.array([  # mxn
+            [2,  1,  1, 1, 0],
+            [1, -1, -1, 0, 1]
+        ])
+        b = np.array([2, -1])  # m,
+        c = np.array([3, 1, 1, 0, 0])  # n,  -> min c.T @ x
+
+        x, *_ = simplex_two_phase(A, b, c, verbose=args.verbose)
+        print('Found optimal x:', x)
+        """
+        solution 
+        """
+    elif args.nr == 3:
+        """
+
+        min -3x1 - 2x2 subject to
+            -x1 + x2 ≤ 4,
+            3x1 − 2x2 ≤ 14,
+            x1 - x2 ≤ 3
+            x ≥ 0.
+
+        we transform the inequality constraints to equality constraints x3, x4. x5
+
+        min -3x1 - 2x2 subject to
+            -x1 +  x2 + x3 = 4,
+            3x1 − 2x2 + x4 = 14,
+             x1 - x2  + x5 = 3
+            x ≥ 0. ( where the new vector x is (x1, x2, x3, x4. x5).T )
+        """
+
+        A = np.array([  # mxn
+            [-1, 1, 1, 0, 0],
+            [3, -2, 0, 1, 0],
+            [1, -1, 0, 0, 1]
+        ])
+        b = np.array([4, 14, 3])  # m,
+        c = np.array([-3, -2, 0, 0, 0])  # n,  -> min c.T @ x
+
+        x = np.array([0, 0, 4, 14, 3])  # initial feasible point x,
+        # which can be trivially found when each constraint has
+        # introduced a slack variable and b ≥ 0.
+
+        # build the initial basis with inactive constraints B_
+        # and active constraints N_ (w.r.t. x ≥ 0)
+        B_ = np.array([i for i in range(len(x)) if x[i] > 0])
+        N_ = np.array([i for i in range(len(x)) if x[i] == 0])
+
+        x, *_ = simplex(A, b, c, x, B_, N_, verbose=args.verbose)
+        print('Found optimal x:', x)
+
+        # x, *_ = simplex_two_phase(A, b, c, verbose=args.verbose)
+        # print('Found optimal x:', x)
 
     else:
         raise argparse.ArgumentError
